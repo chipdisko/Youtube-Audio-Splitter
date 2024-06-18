@@ -4,10 +4,6 @@ import subprocess
 import time
 import threading
 
-import yt_dlp
-import ffmpeg
-import demucs.separate
-
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QLineEdit, QLabel, QFileDialog, QRadioButton, QHBoxLayout, QSpacerItem, QSizePolicy
 from PyQt6.QtCore import QMetaObject, Qt, QEvent, Q_ARG
 
@@ -17,7 +13,8 @@ class YouTubeDownloader(QWidget):
         super().__init__()
         self.initUI()
         self.process_thread = None
-        self.cancel_requested = False  # キャンセル状態を追跡するための属性を追加
+        self.cancel_requested = False
+        self.process = None  # ダウンロードプロセスを追跡するための属性
 
     def initUI(self):
         layout = QVBoxLayout()
@@ -113,101 +110,155 @@ class YouTubeDownloader(QWidget):
             retries += 1
         return False
 
+    def get_executable_path(self, executable_name):
+        if getattr(sys, 'frozen', False):
+            # アプリケーションが py2app でバンドルされている場合
+            app_dir = os.path.dirname(sys.executable)
+            executable_path = os.path.join(app_dir, 'Resources', executable_name)
+        else:
+            # 開発中はプロジェクトディレクトリ内のパスを使用
+                executable_path = executable_name
+        return executable_path
+    
     def download_audio(self, youtube_url, output_directory):
-        # ダウンロードオプションの設定
+        
+        yt_dlp_path = self.get_executable_path('yt-dlp')
+
         output_template = os.path.join(output_directory, '%(title)s.%(ext)s')
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': output_template,
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'wav' if self.wav_button.isChecked() else 'mp3',
-                'preferredquality': 320,
-            }],
-            'noplaylist': True
-        }
+        codec = 'wav' if self.wav_button.isChecked() else 'mp3'
+        command = [
+            yt_dlp_path,
+            '--format', 'bestaudio/best',
+            '--output', output_template,
+            '--extract-audio',
+            '--audio-format', codec,
+            '--no-playlist',
+            youtube_url
+        ]
 
-        # yt-dlpを使用してダウンロード
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(youtube_url, download=False)
-            ydl.download([youtube_url])
+        # yt-dlpをsubprocessで実行してファイル名を取得
+        process = subprocess.Popen(command + ['--get-filename'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        stdout, stderr = process.communicate()
 
-        # ダウンロードされたファイルのパスを取得
-        final_path = output_template.replace('%(title)s', info_dict['title'])
-        final_path = final_path.replace('%(ext)s', 'wav' if self.wav_button.isChecked() else 'mp3')
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, command, output=stdout, stderr=stderr)
 
-        if not os.path.exists(final_path):
-            raise FileNotFoundError("Downloaded file not found after download.")
+        # yt-dlpの出力からファイル名を取得
+        final_path = stdout.strip()
+        if os.path.exists(final_path):
+            print("[!] [Skip Process] DOWNLOAD -- File already exists")
+            return final_path  # 既にファイルが存在する場合はダウンロードをスキップ
 
+        # ダウンロードを実行
+        self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        # プロセスの終了を待つ
+        while True:
+            if self.cancel_requested:
+                self.process.terminate()  # キャンセルリクエストがあればプロセスを終了
+                print("[!] [Cancel Process] Download process terminated")
+                self.update_status('Download cancelled.')
+                break
+            if self.process.poll() is not None:  # プロセスが終了したかチェック
+                break
+            time.sleep(0.1)  # 少し待ってから再度チェック
+
+        stdout, stderr = self.process.communicate()
+
+        if self.process.returncode != 0:
+            raise subprocess.CalledProcessError(self.process.returncode, command, output=stdout, stderr=stderr)
+        self.process = None
         return final_path
 
-    def select_best_audio_format(self, formats_output):
-        # 利用可能なフォーマットから最高音質のものを選択するロジック実装
-        # ここでは単純化のために、最後にリストされたオーディオフォーマットを選択しています
-        lines = formats_output.strip().split('\n')
-        best_format = None
-        for line in lines:
-            if 'audio only' in line:
-                best_format = line.split()[0]  # フォーマットIDを取得
-        return best_format
-
     def convert_audio(self, input_file, output_directory):
+        if self.cancel_requested:
+            self.update_status('# CONVERT cancelled before starting.')
+            return
+        
         base_name = os.path.splitext(os.path.basename(input_file))[0]
         output_file = os.path.join(output_directory, f'{base_name}.wav')
 
         if not os.path.exists(output_file):
-            if self.wav_button.isChecked():
-                stream = ffmpeg.input(input_file)
-                stream = ffmpeg.output(stream, output_file, acodec='pcm_s16le', ar='44100')
-            else:
-                output_file = os.path.join(output_directory, f'{base_name}.mp3')
-                stream = ffmpeg.input(input_file)
-                stream = ffmpeg.output(stream, output_file, audio_bitrate='192k')
-            
-            ffmpeg.run(stream, overwrite_output=True)
+            ffmpeg_path = self.get_executable_path('ffmpeg')
+            codec = 'pcm_s16le' if self.wav_button.isChecked() else 'libmp3lame'
+            bitrate = '320k' if codec == 'libmp3lame' else None
+            command = [
+                ffmpeg_path,
+                '-i', input_file,
+                '-vn',  # ビデオを無視
+                '-acodec', codec  # オーディオコーデック
+            ]
+            if bitrate:
+                command.extend(['-b:a', bitrate])
+            command.append(output_file)
+
+            # subprocessでffmpegコマンドを実行
+            self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            # プロセスの終了を待つ
+            while True:
+                if self.cancel_requested:
+                    self.process.terminate()  # キャンセルリクエストがあればプロセスを終了
+                    print("[!] [Cancel Process] Convert process terminated")
+                    self.update_status('Convert cancelled.')
+                    break
+                if self.process.poll() is not None:  # プロセスが終了したかチェック
+                    break
+                time.sleep(0.1)  # 少し待ってから再度チェック
+
+            stdout, stderr = self.process.communicate()
+
+            if self.process.returncode != 0:
+                raise subprocess.CalledProcessError(self.process.returncode, command, output=stdout, stderr=stderr)
+            self.process = None
         else:
             print("[!] [Skip Process] CONVERT -- File already exists")
-            return output_file
-
         return output_file
 
-
     def split_audio(self, input_file, output_directory):
-        def run_demucs():
-            if self.wait_for_file(input_file, delay=0.5):
-                options = [
-                    '-o', output_directory,
-                    '-d', 'cpu',
-                    input_file,
-                ]
-                demucs.separate.main(options)
-                if not self.cancel_requested:
-                    self.update_status('100% | SPLIT COMPLETED')
-                else:
-                    self.update_status('Process cancelled during splitting.')
-
         if self.cancel_requested:
-            self.update_status('Process cancelled before starting.')
+            self.update_status('# SPLIT cancelled before starting.')
             return
+        
+        if self.wait_for_file(input_file, delay=0.5):
+            demucs_path = self.get_executable_path('demucs.separate')
+            command = [
+                'python3', '-m', demucs_path,
+                '-o', output_directory,
+                '-d', 'cpu',
+                input_file
+            ]
+            self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, universal_newlines=True)
+            
+            # プロセスの終了を待つ
+            while True:
+                if self.cancel_requested:
+                    self.process.terminate()  # キャンセルリクエストがあればプロセスを終了
+                    print("[!] [Cancel Process] Split process terminated")
+                    self.update_status('Split cancelled.')
+                    break
+                
+                output = self.process.stdout.readline()
+                if output:
+                    print(output.strip())  # 標準出力にログを表示
 
-        # スレッドを作成してDemucsの処理を開始
-        demucs_thread = threading.Thread(target=run_demucs)
-        demucs_thread.start()
+                error = self.process.stderr.readline()
+                if error:
+                    print(error.strip())  # 標準エラーにログを表示
 
-        # キャンセルがリクエストされた場合、スレッドの終了を待つ
-        while demucs_thread.is_alive():
-            if self.cancel_requested:
-                self.update_status('Cancelling...')
-                # ここでDemucsの処理を安全に停止する方法が必要ですが、
-                # 外部プロセスやライブラリのAPIに依存するため、具体的な実装はライブラリのドキュメントを参照してください。
-                # 例えば、プロセスを強制終了する、またはフラグを使ってループを抜けるなどの方法が考えられます。
-                break
-            time.sleep(0.1)  # 少し待ってから再度チェック
+                if self.process.poll() is not None:
+                    break
 
-        demucs_thread.join()  # スレッドが終了するのを確実に待つ
+                time.sleep(0.1)  # 少し待ってから再度チェック
 
-    def update_status(self, text):
-        QMetaObject.invokeMethod(self.status_label, "setText", Qt.ConnectionType.QueuedConnection, Q_ARG(str, text))
+            stdout, stderr = self.process.communicate()
+
+            if self.process.returncode != 0:
+                raise subprocess.CalledProcessError(self.process.returncode, command, output=stdout, stderr=stderr)
+            
+            self.update_status('100% | SPLIT COMPLETED')
+            self.process = None
+            print("[!] [SPLIT COMPLETED]")
 
     def download_and_split(self):
         try:
@@ -272,6 +323,15 @@ class YouTubeDownloader(QWidget):
             self.cancel_requested = False
             self.process_thread = None  # スレッドのクリーンアップ
 
+    def cancel_process(self):
+        print("[!] [Cancel Process] cancel_process")
+        
+        # キャンセルボタンを無効化
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #555; color: #888; padding: 8px; margin: 8px; }")
+
+        self.cancel_requested = True  # キャンセル状態を設定
+
     def view_in_finder(self):
         directory = self.output_path_display.text()
         if sys.platform == "darwin":
@@ -281,16 +341,8 @@ class YouTubeDownloader(QWidget):
         else:
             subprocess.run(["xdg-open", directory])
 
-    def cancel_process(self):
-        print("[!] [Cancel Process] cancel_process")
-
-        # スレッドが実行中であれば停止
-        if self.process_thread and self.process_thread.is_alive():
-            self.cancel_requested = True  # キャンセル求を設定
-            self.process_thread.join(timeout=1)  # スッドが終了するのを待つ
-
-        # GUI thread-safe method to update label text
-        QMetaObject.invokeMethod(self.status_label, "setText", Qt.ConnectionType.QueuedConnection, Q_ARG(str, ''))
+    def update_status(self, text):
+        QMetaObject.invokeMethod(self.status_label, "setText", Qt.ConnectionType.QueuedConnection, Q_ARG(str, text))
 
     def disable_widgets(self):
         self.url_input.setEnabled(False)
@@ -306,7 +358,7 @@ class YouTubeDownloader(QWidget):
         self.output_path_display.setStyleSheet("background-color: #797979; color: #000;")
 
         # ボタンのスタイル更新
-        self.download_button.setStyleSheet("QPushButton { font-size: 24px; background-color: #111; color: #283; padding: 8px; margin: 8px; }")
+        self.download_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #111; color: #283; padding: 8px; margin: 8px; }")
         self.download_button.setText("... Processing ...")
         self.cancel_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #bb3333; color: #fee; padding: 8px; margin: 8px; }")
 
