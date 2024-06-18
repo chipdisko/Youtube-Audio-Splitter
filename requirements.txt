@@ -1,0 +1,6 @@
+yt-dlp
+ffmpeg
+demucs
+torchaudio
+soundfile
+PyQt6
