@@ -11,25 +11,12 @@ import demucs.separate
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QLineEdit, QLabel, QFileDialog, QRadioButton, QHBoxLayout, QSpacerItem, QSizePolicy
 from PyQt6.QtCore import QMetaObject, Qt, QEvent, Q_ARG
 
-def check_dependency_installed(command):
-    try:
-        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return True
-    except subprocess.CalledProcessError:
-        return False
-
-def setup_dependencies():
-    if not check_dependency_installed(['ffmpeg', '-version']):
-        bundled_ffmpeg_path = os.path.join(sys._MEIPASS, 'ffmpeg')  # PyInstallerでパッケージ化する場合
-        os.environ['PATH'] += os.pathsep + bundled_ffmpeg_path
 
 class YouTubeDownloader(QWidget):
     def __init__(self):
-        setup_dependencies()
         super().__init__()
         self.initUI()
-        self.download_thread = None
-        self.process = None
+        self.process_thread = None
         self.cancel_requested = False  # キャンセル状態を追跡するための属性を追加
 
     def initUI(self):
@@ -58,8 +45,7 @@ class YouTubeDownloader(QWidget):
 
         self.output_format_label = QLabel('* Output is alway .wav', self)
         layout.addWidget(self.output_format_label)
-
-
+        
         # Select Output Directoryの上に明確なスペースを追加
         layout.addItem(QSpacerItem(20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
 
@@ -85,13 +71,10 @@ class YouTubeDownloader(QWidget):
 
         self.download_button = QPushButton('Download and Split', self)
         self.download_button.clicked.connect(self.download_and_split)
-        # ボタンのスタイルを設定
-        self.download_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #006400; color: #f4f4f4; padding: 8px; margin: 8px; }")
         layout.addWidget(self.download_button)
 
         # キャンセルボタンを無効化
         self.cancel_button = QPushButton('Cancel', self)
-        self.cancel_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #555; color: #888; padding: 8px; margin: 8px; }")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_process)
         layout.addWidget(self.cancel_button)
@@ -103,6 +86,9 @@ class YouTubeDownloader(QWidget):
         self.setLayout(layout)
         self.setWindowTitle('YouTube Audio Splitter')
         self.setGeometry(300, 300, 500, 250)
+
+        self.enable_widgets()
+
 
     def select_output_directory(self):
         options = QFileDialog.Options()
@@ -225,12 +211,12 @@ class YouTubeDownloader(QWidget):
 
     def download_and_split(self):
         try:
-            if self.download_thread is not None and self.download_thread.is_alive():
+            if self.process_thread is not None and self.process_thread.is_alive():
                 self.status_label.setText('Error: A download is already in progress.')
             else:
                 self.disable_widgets()  # ここでウィジェットを disable に設定
-                self.download_thread = threading.Thread(target=self._download_and_split_thread)
-                self.download_thread.start()
+                self.process_thread = threading.Thread(target=self._download_and_split_thread)
+                self.process_thread.start()
                 self.status_label.setText('Downloading...')
         except Exception as e:
             print(f"Error occurred: {e}")
@@ -284,47 +270,7 @@ class YouTubeDownloader(QWidget):
         finally:
             self.enable_widgets()
             self.cancel_requested = False
-            self.download_thread = None  # スレッドのクリーンアップ
-
-    def disable_widgets(self):
-        self.url_input.setEnabled(False)
-        self.output_path_display.setEnabled(False)
-        self.output_path_button.setEnabled(False)
-        self.download_button.setEnabled(False)
-        self.wav_button.setEnabled(False)
-        self.mp3_button.setEnabled(False)
-        # ラベルのフォント色を更新
-        self.url_label.setStyleSheet("QLabel { color: #797979; }")
-        self.output_label.setStyleSheet("QLabel { color: #797979; }")
-        self.format_label.setStyleSheet("QLabel { color: #797979; }")
-        self.output_format_label.setStyleSheet("QLabel { color: #797979; }")
-        # 入力欄のスタイルを更新
-        self.url_input.setStyleSheet("background-color: #797979; color: #000;")
-        self.output_path_display.setStyleSheet("background-color: #797979; color: #000;")
-        # ボタンのスタイル更新
-        self.download_button.setStyleSheet("QPushButton { font-size: 24px; background-color: #111; color: #283; padding: 8px; margin: 8px; }")
-        self.download_button.setText("... Processing ...")
-        self.cancel_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #bb3333; color: #fee; padding: 8px; margin: 8px; }")
-        self.cancel_button.setEnabled(True)
-    def enable_widgets(self):
-        self.url_input.setEnabled(True)
-        self.output_path_display.setEnabled(True)
-        self.output_path_button.setEnabled(True)
-        self.download_button.setEnabled(True)
-        self.wav_button.setEnabled(True)
-        self.mp3_button.setEnabled(True)
-        self.cancel_button.setEnabled(False)
-        # 入力欄のスタイルを元に戻す
-        self.url_input.setStyleSheet("")
-        self.output_path_display.setStyleSheet("")
-        # ボタンのスタイルを元戻す
-        self.download_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #006400; color: #f4f4f4; padding: 8px; margin: 8px; }")
-        self.download_button.setText("Download and Split")
-        self.download_button.clicked.connect(self.download_and_split)  # イベントハンドラの再設定
-        # 特定のボタンだけを再度有効化する
-        self.view_button.setEnabled(True)
-        
-        self.cancel_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #555; color: #888; padding: 8px; margin: 8px; }")
+            self.process_thread = None  # スレッドのクリーンアップ
 
     def view_in_finder(self):
         directory = self.output_path_display.text()
@@ -337,33 +283,53 @@ class YouTubeDownloader(QWidget):
 
     def cancel_process(self):
         print("[!] [Cancel Process] cancel_process")
-        # 実行中のプロセスがあれば終了
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            self.process.wait()
 
         # スレッドが実行中であれば停止
-        if self.download_thread and self.download_thread.is_alive():
+        if self.process_thread and self.process_thread.is_alive():
             self.cancel_requested = True  # キャンセル求を設定
-            self.download_thread.join(timeout=1)  # スッドが終了するのを待つ
+            self.process_thread.join(timeout=1)  # スッドが終了するのを待つ
 
         # GUI thread-safe method to update label text
         QMetaObject.invokeMethod(self.status_label, "setText", Qt.ConnectionType.QueuedConnection, Q_ARG(str, ''))
+
+    def disable_widgets(self):
+        self.url_input.setEnabled(False)
+        self.output_path_display.setEnabled(False)
+        self.output_path_button.setEnabled(False)
+        self.wav_button.setEnabled(False)
+        self.mp3_button.setEnabled(False)
+        self.download_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+
+        # 入力欄のスタイルを更新
+        self.url_input.setStyleSheet("background-color: #797979; color: #000;")
+        self.output_path_display.setStyleSheet("background-color: #797979; color: #000;")
+
+        # ボタンのスタイル更新
+        self.download_button.setStyleSheet("QPushButton { font-size: 24px; background-color: #111; color: #283; padding: 8px; margin: 8px; }")
+        self.download_button.setText("... Processing ...")
+        self.cancel_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #bb3333; color: #fee; padding: 8px; margin: 8px; }")
+
+    def enable_widgets(self):
+        self.url_input.setEnabled(True)
+        self.output_path_display.setEnabled(True)
+        self.output_path_button.setEnabled(True)
+        self.wav_button.setEnabled(True)
+        self.mp3_button.setEnabled(True)
+        self.download_button.setEnabled(True)
+        self.cancel_button.setEnabled(False)
+
+        # ボタンのスタイルを元に戻す
+        self.download_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #006400; color: #f4f4f4; padding: 8px; margin: 8px; }")
+        self.download_button.setText("Download and Split")
+        self.download_button.clicked.connect(self.download_and_split)  # イベントハンドラの再設定        
+        self.cancel_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #555; color: #888; padding: 8px; margin: 8px; }")
 
 def main():
     app = QApplication(sys.argv)
     ex = YouTubeDownloader()
     ex.show()
     sys.exit(app.exec())
-
-if __name__ == '__main__':
-    main()
-
-def main():
-    app = QApplication(sys.argv)
-    ex = YouTubeDownloader()
-    ex.show()
-    sys.exit(app.exec_())
 
 if __name__ == '__main__':
     main()
