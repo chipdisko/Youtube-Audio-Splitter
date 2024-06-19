@@ -1,4 +1,4 @@
-# YT SPLIT
+# YouTube Audio Splitter
 
 ## environment
 
