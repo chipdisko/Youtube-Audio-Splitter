@@ -4,7 +4,7 @@ import subprocess
 import time
 import threading
 
-from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QLineEdit, QLabel, QFileDialog, QRadioButton, QHBoxLayout, QSpacerItem, QSizePolicy
+from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QLineEdit, QLabel, QFileDialog, QRadioButton, QHBoxLayout, QSpacerItem, QSizePolicy, QButtonGroup
 from PyQt6.QtCore import QMetaObject, Qt, QEvent, Q_ARG
 
 
@@ -36,6 +36,12 @@ class YouTubeDownloader(QWidget):
         self.wav_button = QRadioButton("WAV -- HQ! but SLOW...")
         self.mp3_button = QRadioButton("MP3 -- LQ.. but FAST!")
         self.wav_button.setChecked(True)  # WAVをデフォルトに設定
+
+        # QButtonGroupを作成してラジオボタンを追加
+        self.format_group = QButtonGroup(self)
+        self.format_group.addButton(self.wav_button)
+        self.format_group.addButton(self.mp3_button)
+
         self.format_layout.addWidget(self.wav_button)
         self.format_layout.addWidget(self.mp3_button)
         layout.addLayout(self.format_layout)
@@ -65,6 +71,24 @@ class YouTubeDownloader(QWidget):
         layout.addLayout(self.directory_layout)
 
         layout.addItem(QSpacerItem(20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
+
+        self.operation_layout = QHBoxLayout()
+        self.download_only_button = QRadioButton("Download Only")
+        self.download_and_split_button = QRadioButton("Download and Split")
+        self.download_and_split_button.setChecked(True)  # デフォルトはダウンロードと分割
+
+        # QButtonGroupを作成してラジオボタンを追加
+        self.operation_group = QButtonGroup(self)
+        self.operation_group.addButton(self.download_only_button)
+        self.operation_group.addButton(self.download_and_split_button)
+
+        self.operation_layout.addWidget(self.download_only_button)
+        self.operation_layout.addWidget(self.download_and_split_button)
+        layout.addLayout(self.operation_layout)
+
+        # ラジオボタンの���態が変わったときにボタンのテキストを更新するスロットを接続
+        self.download_only_button.toggled.connect(self.update_download_button_text)
+        self.download_and_split_button.toggled.connect(self.update_download_button_text)
 
         self.download_button = QPushButton('Download and Split', self)
         self.download_button.clicked.connect(self.download_and_split)
@@ -112,6 +136,7 @@ class YouTubeDownloader(QWidget):
 
     def get_executable_path(self, executable_name):
         if getattr(sys, 'frozen', False):
+            print("[!] [get_executable_path] App is bundled")
             # アプリケーションが py2app でバンドルされている場合
             app_dir = os.path.dirname(sys.executable)
             executable_path = os.path.join(app_dir, 'Resources', executable_name)
@@ -155,7 +180,7 @@ class YouTubeDownloader(QWidget):
         # プロセスの終了を待つ
         while True:
             if self.cancel_requested:
-                self.process.terminate()  # キャンセルリクエストがあればプロセスを終了
+                self.process.terminate()  # キャンセルリクエストがあればプロセ��を終了
                 print("[!] [Cancel Process] Download process terminated")
                 self.update_status('Download cancelled.')
                 break
@@ -228,6 +253,7 @@ class YouTubeDownloader(QWidget):
                 '-d', 'cpu',
                 input_file
             ]
+            print("[!] [split_audio] command: " + str(command))
             self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, universal_newlines=True)
             
             # プロセスの終了を待つ
@@ -265,12 +291,42 @@ class YouTubeDownloader(QWidget):
             if self.process_thread is not None and self.process_thread.is_alive():
                 self.status_label.setText('Error: A download is already in progress.')
             else:
-                self.disable_widgets()  # ここでウィジェットを disable に設定
-                self.process_thread = threading.Thread(target=self._download_and_split_thread)
+                self.disable_widgets()
+                if self.download_only_button.isChecked():
+                    self.process_thread = threading.Thread(target=self._download_thread)
+                else:
+                    self.process_thread = threading.Thread(target=self._download_and_split_thread)
                 self.process_thread.start()
                 self.status_label.setText('Downloading...')
         except Exception as e:
             print(f"Error occurred: {e}")
+
+    def _download_thread(self):
+        youtube_url = self.url_input.text()
+        output_directory = self.output_path_display.text()
+
+        if not output_directory:
+            self.status_label.setText('Error: Please select output directory.')
+            return
+
+        self.disable_widgets()
+
+        self.ensure_directory_exists(output_directory)
+
+        self.status_label.setText('[ Start ] Downloading')
+        QApplication.postEvent(self.status_label, QEvent(QEvent.Type.User))
+
+        try:
+            actual_output_path = self.download_audio(youtube_url, output_directory)
+            self.status_label.setText(' --- Download Completed! ---')
+        except subprocess.CalledProcessError as e:
+            self.status_label.setText(f'[x] Error: Command failed with return code {e.returncode}')
+        except Exception as e:
+            self.status_label.setText(f'[x] Error: {e}')
+        finally:
+            self.enable_widgets()
+            self.cancel_requested = False
+            self.process_thread = None
 
     def _download_and_split_thread(self):
         youtube_url = self.url_input.text()
@@ -377,6 +433,12 @@ class YouTubeDownloader(QWidget):
         self.download_button.clicked.connect(self.download_and_split)  # イベントハンドラの再設定        
         self.cancel_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #555; color: #888; padding: 8px; margin: 8px; }")
 
+    def update_download_button_text(self):
+        if self.download_only_button.isChecked():
+            self.download_button.setText('Download Only')
+        else:
+            self.download_button.setText('Download and Split')
+
 def main():
     app = QApplication(sys.argv)
     ex = YouTubeDownloader()
@@ -385,5 +447,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
