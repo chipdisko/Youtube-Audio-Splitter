@@ -4,6 +4,10 @@
 ./yarn.lock
 ./pnpm-lock.yaml
 ./pnpm-workspace.yaml
+bin
+lib
+share
+pyvenv.cfg
 
 # py2app
 /dist/

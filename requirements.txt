@@ -1,5 +1,3 @@
-yt-dlp
-ffmpeg
 demucs
 torchaudio
 soundfile
