@@ -8,6 +8,7 @@ bin
 lib
 share
 pyvenv.cfg
+memo.txt
 
 # py2app
 /dist/
