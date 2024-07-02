@@ -49,6 +49,25 @@ class YouTubeDownloader(QWidget):
         self.output_format_label = QLabel('* Output is alway .wav', self)
         layout.addWidget(self.output_format_label)
         
+
+        layout.addItem(QSpacerItem(20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
+
+        self.operation_layout = QHBoxLayout()
+        self.download_only_button = QRadioButton("Download Only")
+        self.download_and_split_button = QRadioButton("Download and Split")
+        self.download_and_split_button.setChecked(True)  # デフォルトはダウンロードと分割
+
+        # QButtonGroupを作成してラジオボタンを追加
+        self.operation_group = QButtonGroup(self)
+        self.operation_group.addButton(self.download_only_button)
+        self.operation_group.addButton(self.download_and_split_button)
+
+        self.operation_layout.addWidget(self.download_only_button)
+        self.operation_layout.addWidget(self.download_and_split_button)
+        layout.addLayout(self.operation_layout)
+
+
+
         # Select Output Directoryの上に明確なスペースを追加
         layout.addItem(QSpacerItem(20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
 
@@ -70,29 +89,20 @@ class YouTubeDownloader(QWidget):
 
         layout.addLayout(self.directory_layout)
 
-        layout.addItem(QSpacerItem(20, 20, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
-
-        self.operation_layout = QHBoxLayout()
-        self.download_only_button = QRadioButton("Download Only")
-        self.download_and_split_button = QRadioButton("Download and Split")
-        self.download_and_split_button.setChecked(True)  # デフォルトはダウンロードと分割
-
-        # QButtonGroupを作成してラジオボタンを追加
-        self.operation_group = QButtonGroup(self)
-        self.operation_group.addButton(self.download_only_button)
-        self.operation_group.addButton(self.download_and_split_button)
-
-        self.operation_layout.addWidget(self.download_only_button)
-        self.operation_layout.addWidget(self.download_and_split_button)
-        layout.addLayout(self.operation_layout)
-
-        # ラジオボタンの���態が変わったときにボタンのテキストを更新するスロットを接続
+        # ローカルファイル選択ボタンを追加
+        self.local_file_button = QPushButton('Select Local File to split', self)
+        self.local_file_button.clicked.connect(self.select_local_file)
+        layout.addWidget(self.local_file_button)
+        
+        # ラジオボタンのが変わったときにボタンのテキストを更新するスロットを接続
         self.download_only_button.toggled.connect(self.update_download_button_text)
         self.download_and_split_button.toggled.connect(self.update_download_button_text)
 
         self.download_button = QPushButton('Download and Split', self)
         self.download_button.clicked.connect(self.download_and_split)
         layout.addWidget(self.download_button)
+
+
 
         # キャンセルボタンを無効化
         self.cancel_button = QPushButton('Cancel', self)
@@ -180,7 +190,7 @@ class YouTubeDownloader(QWidget):
         # プロセスの終了を待つ
         while True:
             if self.cancel_requested:
-                self.process.terminate()  # キャンセルリクエストがあればプロセ��を終了
+                self.process.terminate()  # キャンセルリクエストがあればプロセスを終了
                 print("[!] [Cancel Process] Download process terminated")
                 self.update_status('Download cancelled.')
                 break
@@ -229,7 +239,7 @@ class YouTubeDownloader(QWidget):
                     break
                 if self.process.poll() is not None:  # プロセスが終了したかチェック
                     break
-                time.sleep(0.1)  # 少し待ってから再度チェック
+                time.sleep(0.1)  # 少し待��てから再度チェック
 
             stdout, stderr = self.process.communicate()
 
@@ -379,6 +389,59 @@ class YouTubeDownloader(QWidget):
             self.cancel_requested = False
             self.process_thread = None  # スレッドのクリーンアップ
 
+    def select_local_file(self):
+        options = QFileDialog.Option.DontUseNativeDialog
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Local File", "", "Audio Files (*.wav *.mp3);;All Files (*)", options=options)
+        if file_path:
+            self.process_local_file(file_path)
+
+    def process_local_file(self, file_path):
+        try:
+            self.disable_widgets()
+            self.status_label.setText('Processing local file...')
+            self.process_thread = threading.Thread(target=self._process_local_file_thread, args=(file_path,))
+            self.process_thread.start()
+        except Exception as e:
+            print(f"Error occurred: {e}")
+
+    def _process_local_file_thread(self, file_path):
+        output_directory = self.output_path_display.text()
+
+        if not output_directory:
+            self.status_label.setText('Error: Please select output directory.')
+            return
+
+        self.ensure_directory_exists(output_directory)
+
+        self.status_label.setText('[ Start ] Converting -> [] Split')
+        QApplication.postEvent(self.status_label, QEvent(QEvent.Type.User))
+
+        try:
+            converted_path = self.convert_audio(file_path, output_directory)
+
+            if self.cancel_requested:
+                self.status_label.setText('Process cancelled.')
+                print("[!] [Cancel Process] _process_local_file_thread")
+                return
+
+            if converted_path:
+                self.status_label.setText('[o] -> [ Start ] Splitting')
+                QApplication.postEvent(self.status_label, QEvent(QEvent.Type.User))
+                self.split_audio(converted_path, output_directory)
+                self.status_label.setText(' --- Completed! ---')
+            else:
+                self.status_label.setText('変換をスキップし、分割処理を開始します。')
+                self.split_audio(file_path, output_directory)
+                self.status_label.setText(' --- Completed! ---')
+        except subprocess.CalledProcessError as e:
+            self.status_label.setText(f'[x] Error: Command failed with return code {e.returncode}')
+        except Exception as e:
+            self.status_label.setText(f'[x] Error: {e}')
+        finally:
+            self.enable_widgets()
+            self.cancel_requested = False
+            self.process_thread = None
+
     def cancel_process(self):
         print("[!] [Cancel Process] cancel_process")
         
@@ -430,7 +493,7 @@ class YouTubeDownloader(QWidget):
         # ボタンのスタイルを元に戻す
         self.download_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #006400; color: #f4f4f4; padding: 8px; margin: 8px; }")
         self.download_button.setText("Download and Split")
-        self.download_button.clicked.connect(self.download_and_split)  # イベントハンドラの再設定        
+        self.download_button.clicked.connect(self.download_and_split)  # イベントハ��ドラの再設定        
         self.cancel_button.setStyleSheet("QPushButton { font-size: 20px; background-color: #555; color: #888; padding: 8px; margin: 8px; }")
 
     def update_download_button_text(self):
