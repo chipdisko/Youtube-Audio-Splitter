@@ -112,7 +112,9 @@ env.bak/
 venv.bak/
 bin/
 lib/
+lib64/
 include/
+share/
 pyvenv.cfg
 
 # Spyder project settings
@@ -260,14 +262,11 @@ pnpm-workspace.yaml
 /build/
 /dist/
 
-# PyInstaller specs
-*.spec
-!setup_ddd.spec
-!setup_standalone.spec
+# PyInstaller specs (generated files only)
+demucs_script.spec
 
-# Resources (except yt-dlp)
-/resources/*
-!/resources/yt-dlp
+# Resources (binaries should not be committed)
+resources/
 
 # Personal notes
 memo.txt
