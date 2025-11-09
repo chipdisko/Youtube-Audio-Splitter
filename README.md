@@ -14,25 +14,26 @@ $ pip3 install -r requirements.txt
 ```
 ## Execute
 
-### Method 1: macOS App Bundle (Easiest)
-Double-click `YouTube Audio Splitter.app` in the `dist/` folder
-
-Or from terminal:
+### Method 1: Simplified Version (Recommended)
 ```
-$ open "dist/YouTube Audio Splitter.app"
+$ source ../Youtube-Audio-Splitter/bin/activate
+$ python3 main_simple.py
 ```
+**Benefits**: Clean code following DRY/YAGNI/KISS principles
 
-### Method 2: Python Script (DDD Architecture)
+### Method 2: DDD Architecture
 ```
 $ source ../Youtube-Audio-Splitter/bin/activate
 $ python3 main.py
 ```
+**Benefits**: Full layered architecture for learning
 
 ### Method 3: Legacy Version
 ```
 $ source ../Youtube-Audio-Splitter/bin/activate
 $ python3 SPLYT.py
 ```
+**Benefits**: Original monolithic version
 
 ## Building macOS App
 

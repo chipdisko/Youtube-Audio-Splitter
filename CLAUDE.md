@@ -4,7 +4,10 @@
 
 YouTube Audio Splitter is a PyQt6-based GUI application that downloads audio from YouTube videos and separates them into individual instrument tracks using AI-powered source separation.
 
-**Architecture**: The project has been refactored using **Lightweight Domain-Driven Design (DDD)** principles with clear separation of concerns across four layers: Domain, Application, Infrastructure, and Presentation.
+**Architecture**: This project includes **3 different implementations**:
+1. **Simplified Version (main_simple.py)** - RECOMMENDED: Follows DRY/YAGNI/KISS principles (~200 lines)
+2. **DDD Architecture (main.py)** - Educational: Full 4-layer architecture (~1500 lines)
+3. **Legacy Version (SPLYT.py)** - Original: Monolithic implementation (~500 lines)
 
 ## Core Features
 
